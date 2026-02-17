@@ -13,7 +13,7 @@ final class WorkoutManager: NSObject, HKWorkoutSessionDelegate, HKLiveWorkoutBui
     var maxHR: Int = 190
     var totalDistance: Double = 0
 
-    nonisolated(unsafe) private var cachedMaxHR: Int = 190
+    @ObservationIgnored nonisolated(unsafe) private var cachedMaxHR: Int = 190
 
     private var session: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
