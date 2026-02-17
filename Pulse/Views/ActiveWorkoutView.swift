@@ -10,6 +10,9 @@ struct ActiveWorkoutView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var hasStarted = false
     @State private var showEndConfirmation = false
+    @State private var showCooldown = false
+    @State private var savedWorkoutPeakHR: Int = 0
+    @State private var audioTimer: Timer?
 
     private let zones = HeartRateZone.allCases.reversed() as [HeartRateZone]
 
@@ -18,7 +21,14 @@ struct ActiveWorkoutView: View {
 
     var body: some View {
         ZStack {
-            if !hasStarted {
+            if showCooldown {
+                CooldownView(
+                    workoutManager: workoutManager,
+                    peakHR: savedWorkoutPeakHR
+                ) {
+                    cleanupAndDismiss()
+                }
+            } else if !hasStarted {
                 startingView
             } else {
                 workoutView
@@ -32,6 +42,7 @@ struct ActiveWorkoutView: View {
                 try await workoutManager.startWorkout()
                 audioCoach.announceWorkoutStart()
                 hasStarted = true
+                startAudioTimer()
             } catch {
                 dismiss()
             }
@@ -66,31 +77,42 @@ struct ActiveWorkoutView: View {
             topBar
 
             GeometryReader { geo in
-                let zoneHeight = geo.size.height / CGFloat(zones.count)
+                let weights = zoneWeights()
+                let totalWeight = weights.reduce(0, +)
+                let totalHeight = geo.size.height
 
                 ZStack {
                     VStack(spacing: 0) {
-                        ForEach(zones, id: \.self) { zone in
+                        ForEach(Array(zones.enumerated()), id: \.element) { index, zone in
                             let range = zone.bpmRange(maxHR: maxHR)
                             let isCurrent = zone == workoutManager.currentZone
-                            let isTarget = zone == targetZone
+                            let distance = workoutManager.currentZone.map { abs(zone.rawValue - $0.rawValue) } ?? 0
+                            let height = totalHeight * (weights[index] / totalWeight)
+                            let zoneOpacity = isCurrent ? 1.0 : max(0.85 - Double(distance) * 0.15, 0.35)
+
                             ZStack {
                                 Rectangle()
                                     .fill(zone.color)
-                                    .opacity(isCurrent ? 1.0 : isTarget ? 0.8 : 0.55)
+                                    .opacity(zoneOpacity)
 
                                 if isCurrent {
                                     Rectangle()
                                         .fill(.white.opacity(0.08))
                                 }
 
+                                LinearGradient(
+                                    colors: [.black.opacity(0.15), .clear, .black.opacity(0.1)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+
                                 HStack(alignment: .center) {
-                                    VStack(alignment: .leading, spacing: 2) {
+                                    VStack(alignment: .leading, spacing: isCurrent ? 4 : 2) {
                                         Text("ZONE \(zone.rawValue)")
-                                            .font(.system(size: isCurrent ? 17 : 15, weight: .heavy, design: .rounded))
+                                            .font(.system(size: isCurrent ? 22 : 14, weight: .heavy, design: .rounded))
                                             .tracking(1)
                                         Text(zone.name.uppercased())
-                                            .font(.system(size: isCurrent ? 12 : 11, weight: .medium, design: .rounded))
+                                            .font(.system(size: isCurrent ? 13 : 10, weight: .medium, design: .rounded))
                                             .opacity(0.8)
                                     }
                                     .foregroundStyle(.white)
@@ -99,11 +121,11 @@ struct ActiveWorkoutView: View {
 
                                     VStack(alignment: .trailing, spacing: 2) {
                                         Text("\(range.upperBound)")
-                                            .font(.system(size: isCurrent ? 15 : 13, weight: .semibold, design: .monospaced))
+                                            .font(.system(size: isCurrent ? 17 : 12, weight: .semibold, design: .monospaced))
                                         Text("\(range.lowerBound)")
-                                            .font(.system(size: isCurrent ? 15 : 13, weight: .semibold, design: .monospaced))
+                                            .font(.system(size: isCurrent ? 17 : 12, weight: .semibold, design: .monospaced))
                                     }
-                                    .foregroundStyle(.white.opacity(isCurrent ? 1.0 : 0.85))
+                                    .foregroundStyle(.white.opacity(isCurrent ? 1.0 : 0.7))
                                 }
                                 .padding(.horizontal, 20)
                             }
@@ -117,15 +139,15 @@ struct ActiveWorkoutView: View {
                                     Rectangle().fill(.white.opacity(0.25)).frame(height: 1)
                                 }
                             }
-                            .frame(height: zoneHeight)
-                            .animation(.easeInOut(duration: 0.3), value: workoutManager.currentZone)
+                            .frame(height: height)
                         }
                     }
+                    .animation(.spring(duration: 0.5), value: workoutManager.currentZone)
 
                     if workoutManager.currentHR > 0 {
                         let fraction = (Double(workoutManager.currentHR) - minBPM) / (maxBPM - minBPM)
                         let clampedFraction = min(max(fraction, 0), 1)
-                        let yPosition = geo.size.height * (1.0 - clampedFraction)
+                        let yPosition = totalHeight * (1.0 - clampedFraction)
 
                         Rectangle()
                             .fill(.white)
@@ -159,10 +181,18 @@ struct ActiveWorkoutView: View {
             bottomBar
         }
         .background(.black)
-        .onChange(of: workoutManager.currentHR) { _, newValue in
-            if newValue > 0 {
-                audioCoach.processHeartRate(newValue, maxHR: maxHR)
-            }
+        .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+    }
+
+    private func zoneWeights() -> [Double] {
+        guard let currentZone = workoutManager.currentZone else {
+            return zones.map { _ in 1.0 }
+        }
+
+        return zones.map { zone in
+            let distance = abs(zone.rawValue - currentZone.rawValue)
+            return max(3.5 - Double(distance) * 0.8, 0.5)
         }
     }
 
@@ -234,22 +264,53 @@ struct ActiveWorkoutView: View {
         .background(.black.opacity(0.55))
     }
 
+    private func startAudioTimer() {
+        let wm = workoutManager
+        let ac = audioCoach
+        let mhr = maxHR
+        audioTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                let hr = wm.currentHR
+                if hr > 0 {
+                    ac.processHeartRate(hr, maxHR: mhr)
+                }
+            }
+        }
+    }
+
+    private func stopAudioTimer() {
+        audioTimer?.invalidate()
+        audioTimer = nil
+    }
+
     private func endWorkout(save: Bool) async {
+        stopAudioTimer()
         do {
             audioCoach.announceWorkoutEnd()
             let result = try await workoutManager.endWorkout()
             if save {
-                saveWorkout(samples: result.samples, duration: result.duration, startDate: result.startDate)
+                let peakHR = result.samples.map(\.1).max() ?? 0
+                saveWorkout(samples: result.samples, duration: result.duration, startDate: result.startDate, distance: result.distance)
+                savedWorkoutPeakHR = peakHR
+                audioCoach.deactivateAudioSession()
+                audioCoach.reset()
+                showCooldown = true
+            } else {
+                audioCoach.deactivateAudioSession()
+                audioCoach.reset()
+                dismiss()
             }
-            audioCoach.deactivateAudioSession()
-            audioCoach.reset()
-            dismiss()
         } catch {
             dismiss()
         }
     }
 
-    private func saveWorkout(samples: [(Date, Int)], duration: TimeInterval, startDate: Date) {
+    private func cleanupAndDismiss() {
+        UIApplication.shared.isIdleTimerDisabled = false
+        dismiss()
+    }
+
+    private func saveWorkout(samples: [(Date, Int)], duration: TimeInterval, startDate: Date, distance: Double?) {
         guard !samples.isEmpty else { return }
 
         let bpms = samples.map(\.1)
@@ -271,6 +332,9 @@ struct ActiveWorkoutView: View {
             }
         }
 
+        let totalDistance = distance ?? 0
+        let avgPace = (totalDistance > 0 && duration > 0) ? (duration / (totalDistance / 1000)) : 0
+
         let record = WorkoutRecord(
             startDate: startDate,
             endDate: Date(),
@@ -284,7 +348,9 @@ struct ActiveWorkoutView: View {
             timeInZone2: zoneTime[.zone2, default: 0],
             timeInZone3: zoneTime[.zone3, default: 0],
             timeInZone4: zoneTime[.zone4, default: 0],
-            timeInZone5: zoneTime[.zone5, default: 0]
+            timeInZone5: zoneTime[.zone5, default: 0],
+            totalDistance: totalDistance,
+            averagePace: avgPace
         )
 
         let hrSamples = samples.map { HRSample(timestamp: $0.0, bpm: $0.1) }

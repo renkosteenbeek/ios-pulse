@@ -26,6 +26,20 @@ struct RunDetailView: View {
         HeartRateZone(rawValue: workout.targetZone)?.color ?? .gray
     }
 
+    private var formattedDistance: String {
+        if workout.totalDistance >= 1000 {
+            return String(format: "%.2f km", workout.totalDistance / 1000)
+        }
+        return String(format: "%.0f m", workout.totalDistance)
+    }
+
+    private var formattedPace: String {
+        guard workout.averagePace > 0 else { return "--" }
+        let minutes = Int(workout.averagePace) / 60
+        let seconds = Int(workout.averagePace) % 60
+        return String(format: "%d:%02d /km", minutes, seconds)
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
@@ -76,6 +90,13 @@ struct RunDetailView: View {
             StatCard(value: "\(workout.averageHR)", label: "Avg HR")
             StatCard(value: "\(workout.maxHR)", label: "Max HR")
             StatCard(value: "\(workout.minHR)", label: "Min HR")
+            if workout.totalDistance > 0 {
+                StatCard(value: formattedDistance, label: "Distance")
+                StatCard(value: formattedPace, label: "Avg Pace")
+            }
+            if workout.cooldownHR > 0 {
+                StatCard(value: "\(workout.cooldownHR)", label: "Recovery HR")
+            }
         }
     }
 

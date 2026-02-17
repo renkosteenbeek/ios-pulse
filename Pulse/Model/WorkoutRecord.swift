@@ -17,6 +17,9 @@ final class WorkoutRecord {
     var timeInZone3: TimeInterval
     var timeInZone4: TimeInterval
     var timeInZone5: TimeInterval
+    var totalDistance: Double
+    var averagePace: Double
+    var cooldownHR: Int
 
     @Relationship(deleteRule: .cascade, inverse: \HRSample.workout)
     var samples: [HRSample] = []
@@ -35,7 +38,10 @@ final class WorkoutRecord {
         timeInZone2: TimeInterval,
         timeInZone3: TimeInterval,
         timeInZone4: TimeInterval,
-        timeInZone5: TimeInterval
+        timeInZone5: TimeInterval,
+        totalDistance: Double = 0,
+        averagePace: Double = 0,
+        cooldownHR: Int = 0
     ) {
         self.id = id
         self.startDate = startDate
@@ -51,5 +57,8 @@ final class WorkoutRecord {
         self.timeInZone3 = timeInZone3
         self.timeInZone4 = timeInZone4
         self.timeInZone5 = timeInZone5
+        self.totalDistance = totalDistance
+        self.averagePace = averagePace
+        self.cooldownHR = cooldownHR
     }
 }

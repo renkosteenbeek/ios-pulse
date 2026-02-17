@@ -11,6 +11,7 @@ final class WorkoutManager: NSObject, HKWorkoutSessionDelegate, HKLiveWorkoutBui
     var elapsedTime: TimeInterval = 0
     var samples: [(Date, Int)] = []
     var maxHR: Int = 190
+    var totalDistance: Double = 0
 
     nonisolated(unsafe) private var cachedMaxHR: Int = 190
 
@@ -57,7 +58,7 @@ final class WorkoutManager: NSObject, HKWorkoutSessionDelegate, HKLiveWorkoutBui
         session?.resume()
     }
 
-    func endWorkout() async throws -> (samples: [(Date, Int)], duration: TimeInterval, startDate: Date) {
+    func endWorkout() async throws -> (samples: [(Date, Int)], duration: TimeInterval, startDate: Date, distance: Double?) {
         let endDate = Date()
         let startDate = builder?.startDate ?? endDate
         session?.end()
@@ -71,6 +72,9 @@ final class WorkoutManager: NSObject, HKWorkoutSessionDelegate, HKLiveWorkoutBui
                 }
             }
         }
+
+        let distanceStats = builder?.statistics(for: HKQuantityType(.distanceWalkingRunning))
+        let finalDistance = distanceStats?.sumQuantity()?.doubleValue(for: .meter())
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             builder?.finishWorkout { workout, error in
@@ -88,10 +92,11 @@ final class WorkoutManager: NSObject, HKWorkoutSessionDelegate, HKLiveWorkoutBui
         isPaused = false
         currentHR = 0
         currentZone = nil
+        totalDistance = 0
         session = nil
         builder = nil
         samples = []
-        return (collected, elapsed, startDate)
+        return (collected, elapsed, startDate, finalDistance)
     }
 
     var builderElapsedTime: TimeInterval {
@@ -100,18 +105,30 @@ final class WorkoutManager: NSObject, HKWorkoutSessionDelegate, HKLiveWorkoutBui
 
     nonisolated func workoutBuilder(_ workoutBuilder: HKLiveWorkoutBuilder, didCollectDataOf collectedTypes: Set<HKSampleType>) {
         let hrType = HKQuantityType(.heartRate)
-        guard collectedTypes.contains(hrType) else { return }
-
-        let stats = workoutBuilder.statistics(for: hrType)
-        let quantity = stats?.mostRecentQuantity()
-        let bpm = quantity?.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+        let distanceType = HKQuantityType(.distanceWalkingRunning)
         let maxHR = cachedMaxHR
 
+        var bpm: Double?
+        var distance: Double?
+
+        if collectedTypes.contains(hrType) {
+            let stats = workoutBuilder.statistics(for: hrType)
+            bpm = stats?.mostRecentQuantity()?.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+        }
+
+        if collectedTypes.contains(distanceType) {
+            distance = workoutBuilder.statistics(for: distanceType)?.sumQuantity()?.doubleValue(for: .meter())
+        }
+
         Task { @MainActor in
-            guard let bpm else { return }
-            self.currentHR = Int(bpm)
-            self.currentZone = HeartRateZone.zone(for: Int(bpm), maxHR: maxHR)
-            self.samples.append((Date(), Int(bpm)))
+            if let bpm {
+                self.currentHR = Int(bpm)
+                self.currentZone = HeartRateZone.zone(for: Int(bpm), maxHR: maxHR)
+                self.samples.append((Date(), Int(bpm)))
+            }
+            if let distance {
+                self.totalDistance = distance
+            }
         }
     }
 

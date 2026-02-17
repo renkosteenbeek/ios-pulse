@@ -100,6 +100,7 @@ struct HomeView: View {
 
                 Button {
                     workoutManager.maxHR = profile.maxHeartRate
+                    audioCoach.reloadVoice()
                     audioCoach.targetZone = selectedZone
                     audioCoach.isEnabled = audioEnabled
                     showWorkout = true
